@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' blob:; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./assets/css/shell.css">
+  <title>AJI Terrain — P0 Runtime V3.3.3</title>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">AJI HUB · STOCK TERRAIN</p>
+      <h1>Runtime P0 V3.3.3</h1>
+      <p class="subtitle">Vanilla · zéro build · offline-first · BBCCDD · scanner Android</p>
+    </div>
+    <div class="badges" aria-label="État runtime">
+      <span class="badge" id="pwaBadge">PWA : initialisation</span>
+      <span class="badge" id="networkBadge">Réseau : —</span>
+      <span class="badge" id="saveBadge">Stockage : —</span>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="gate-grid" aria-label="Gates P0">
+      <article class="gate"><span>BBCCDD</span><strong id="gateLocation">À tester</strong></article>
+      <article class="gate"><span>IndexedDB</span><strong id="gateStorage">À tester</strong></article>
+      <article class="gate"><span>Scanner</span><strong id="gateScanner">À tester</strong></article>
+      <article class="gate"><span>Outbox</span><strong id="gateSync">À tester</strong></article>
+    </section>
+
+    <section class="grid two">
+      <article class="card">
+        <div class="card-head">
+          <div><p class="kicker">P0.2</p><h2>Emplacement TFI</h2></div>
+          <span class="status-pill">Canonique : 6 caractères</span>
+        </div>
+        <div class="card-body">
+          <div class="blocks">
+            <label>BB<input id="locBB" maxlength="2" inputmode="text" autocomplete="off" placeholder="01"></label>
+            <label>CC<input id="locCC" maxlength="2" inputmode="text" autocomplete="off" placeholder="03"></label>
+            <label>DD<input id="locDD" maxlength="2" inputmode="text" autocomplete="off" placeholder="02"></label>
+          </div>
+          <div class="location-result">
+            <div><span>Valeur ERP</span><strong id="locCanonical">------</strong></div>
+            <div><span>Affichage</span><strong id="locHuman">-- -- --</strong></div>
+          </div>
+          <div class="form-grid">
+            <label>Code article<input id="articleCode" autocomplete="off" placeholder="Code ou scan"></label>
+            <label>Zone physique<input id="physicalZone" autocomplete="off" placeholder="ZP, 03, EXT…"></label>
+            <label class="full">Désignation<input id="articleLabel" autocomplete="off" placeholder="Désignation facultative"></label>
+          </div>
+          <div class="actions">
+            <button class="primary" id="saveLocation" type="button">Enregistrer localement</button>
+            <button class="secondary" id="clearForm" type="button">Effacer</button>
+          </div>
+          <p class="notice" id="locationNotice">Aucune donnée métier réelle n’est incluse dans ce shell.</p>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div><p class="kicker">P0.4</p><h2>Scanner terrain</h2></div>
+          <span class="status-pill" id="scannerEngine">Non démarré</span>
+        </div>
+        <div class="card-body">
+          <div id="scannerViewport" class="scanner" aria-label="Flux caméra"><p>Le flux caméra apparaîtra ici.</p></div>
+          <div class="actions wrap">
+            <button class="primary" id="scanStart" type="button">Démarrer caméra</button>
+            <button class="secondary" id="scanSwitch" type="button" disabled>Changer caméra</button>
+            <button class="secondary" id="scanTorch" type="button" disabled>Torche</button>
+            <button class="danger" id="scanStop" type="button" disabled>Arrêter</button>
+          </div>
+          <div class="scan-result"><span>Dernier code</span><strong id="scanResult">—</strong><small id="scanMeta">—</small></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="grid two">
+      <article class="card">
+        <div class="card-head">
+          <div><p class="kicker">P0.1</p><h2>Stockage offline</h2></div>
+          <span class="status-pill" id="stateRevision">Révision 0</span>
+        </div>
+        <div class="card-body">
+          <div class="metrics">
+            <div><span>Affectations test</span><strong id="countZonage">0</strong></div>
+            <div><span>Source chargée</span><strong id="storageSource">Nouvelle</strong></div>
+          </div>
+          <div class="actions wrap">
+            <button class="secondary" id="flushStorage" type="button">Forcer sauvegarde</button>
+            <button class="secondary" id="requestPersist" type="button">Demander stockage persistant</button>
+            <button class="danger" id="resetState" type="button">Réinitialiser shell</button>
+          </div>
+          <div class="table-wrap">
+            <table><thead><tr><th>Article</th><th>Zone</th><th>BBCCDD</th><th></th></tr></thead><tbody id="locationRows"></tbody></table>
+          </div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div><p class="kicker">P0.3</p><h2>Outbox & synchronisation</h2></div>
+          <span class="status-pill" id="syncStatusPill">Non configurée</span>
+        </div>
+        <div class="card-body">
+          <div class="form-grid">
+            <label>Endpoint HTTPS<input id="syncEndpoint" autocomplete="off" placeholder="/api/aji-sync"></label>
+            <label>Site<input id="syncSite" maxlength="12" value="BR" autocomplete="off"></label>
+            <label class="full">Clé de session<input id="syncKey" type="password" autocomplete="off" placeholder="Jamais persistée dans localStorage"></label>
+          </div>
+          <div class="actions wrap">
+            <button class="secondary" id="syncConfigure" type="button">Appliquer configuration</button>
+            <button class="secondary" id="syncQueue" type="button">Créer checkpoint</button>
+            <button class="primary" id="syncFlush" type="button">Tenter synchronisation</button>
+          </div>
+          <pre id="syncDetails" class="details">État : —</pre>
+        </div>
+      </article>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><div><p class="kicker">RECETTE</p><h2>Journal P0</h2></div><button class="secondary" id="clearLog" type="button">Effacer journal</button></div>
+      <div class="card-body"><ol id="eventLog" class="event-log"></ol></div>
+    </section>
+  </main>
+
+  <script src="./assets/js/vendor/vendor-loader.js"></script>
+  <script src="./assets/js/services/tfi-location.service.js"></script>
+  <script src="./assets/js/services/storage.service.js"></script>
+  <script src="./assets/js/services/scanner.service.js"></script>
+  <script src="./assets/js/services/pwa.service.js"></script>
+  <script src="./assets/js/services/sync.service.js"></script>
+  <script src="./assets/js/shell-runtime.js"></script>
+</body>
+</html>
