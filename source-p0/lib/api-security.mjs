@@ -3,6 +3,8 @@ const OP_RE=/^[A-Za-z0-9_-]{6,100}$/;
 const BBCCDD_RE=/^[A-Z0-9]{6}$/;
 const HARD_MAX_BODY_BYTES=4_000_000;
 const HARD_MAX_RECORDS=5_000;
+export const EVENT_COLLECTIONS=Object.freeze(["affectations","inventorySessions","inventoryCounts","preparations","preparationLines"]);
+const EVENT_COLLECTION_SET=new Set(EVENT_COLLECTIONS);
 
 export function cleanString(value,max=500){return String(value??"").trim().slice(0,max)}
 export function normalizeSite(value){return cleanString(value,12).toUpperCase()}
@@ -67,10 +69,7 @@ function validateItemBasics(item,path,site){
   return null;
 }
 function validateLocation(value,path){return validBbccdd(value)?null:`${path} doit être BBCCDD`}
-export function validateEnvelope(body,{headerContract,headerSite,maxRecords=HARD_MAX_RECORDS}={}){
-  if(!isPlainObject(body))return"Corps JSON requis";
-  if(!validOperationId(body.operationId))return"operationId invalide";
-  if(body.operation!=="checkpoint")return"operation non supportée";
+function validateCheckpoint(body,{headerContract,headerSite,maxRecords}){
   if(headerContract!=="zonage-sync/1.0")return"X-AJI-Contract invalide";
   const p=body.payload;
   if(!isPlainObject(p))return"payload requis";
@@ -82,30 +81,49 @@ export function validateEnvelope(body,{headerContract,headerSite,maxRecords=HARD
   const names=["affectations","inventorySessions","inventoryCounts","preparations"];
   for(const key of names){if(p[key]!=null&&!Array.isArray(p[key]))return`${key} doit être un tableau`}
   if(countPayloadRecords(p)>maxRecords)return`payload dépasse ${maxRecords} enregistrements`;
-
-  for(let i=0;i<(p.affectations||[]).length;i++){
-    const item=p.affectations[i],path=`affectations[${i}]`,e=validateItemBasics(item,path,site);if(e)return e;
-    const le=validateLocation(item.emplacementErp,`${path}.emplacementErp`);if(le)return le;
-  }
-  for(let i=0;i<(p.inventorySessions||[]).length;i++){
-    const item=p.inventorySessions[i],path=`inventorySessions[${i}]`,e=validateItemBasics(item,path,site);if(e)return e;
-    if(cleanString(item.mode,30).toLowerCase()==="annuel"){
-      const le=validateLocation(item.scope,`${path}.scope`);if(le)return le;
-    }
-  }
-  for(let i=0;i<(p.inventoryCounts||[]).length;i++){
-    const item=p.inventoryCounts[i],path=`inventoryCounts[${i}]`,e=validateItemBasics(item,path,site);if(e)return e;
-    const le=validateLocation(item.emplacementErp,`${path}.emplacementErp`);if(le)return le;
-  }
-  for(let i=0;i<(p.preparations||[]).length;i++){
-    const prep=p.preparations[i],path=`preparations[${i}]`,e=validateItemBasics(prep,path,site);if(e)return e;
-    if(prep.lines!=null&&!Array.isArray(prep.lines))return`${path}.lines doit être un tableau`;
-    for(let j=0;j<(prep.lines||[]).length;j++){
-      const line=prep.lines[j],lp=`${path}.lines[${j}]`,le=validateItemBasics(line,lp,site);if(le)return le;
-      const loc=validateLocation(line.emplacementErp,`${lp}.emplacementErp`);if(loc)return loc;
-    }
+  for(let i=0;i<(p.affectations||[]).length;i++){const item=p.affectations[i],path=`affectations[${i}]`,e=validateItemBasics(item,path,site);if(e)return e;const le=validateLocation(item.emplacementErp,`${path}.emplacementErp`);if(le)return le}
+  for(let i=0;i<(p.inventorySessions||[]).length;i++){const item=p.inventorySessions[i],path=`inventorySessions[${i}]`,e=validateItemBasics(item,path,site);if(e)return e;if(cleanString(item.mode,30).toLowerCase()==="annuel"){const le=validateLocation(item.scope,`${path}.scope`);if(le)return le}}
+  for(let i=0;i<(p.inventoryCounts||[]).length;i++){const item=p.inventoryCounts[i],path=`inventoryCounts[${i}]`,e=validateItemBasics(item,path,site);if(e)return e;const le=validateLocation(item.emplacementErp,`${path}.emplacementErp`);if(le)return le}
+  for(let i=0;i<(p.preparations||[]).length;i++){const prep=p.preparations[i],path=`preparations[${i}]`,e=validateItemBasics(prep,path,site);if(e)return e;if(prep.lines!=null&&!Array.isArray(prep.lines))return`${path}.lines doit être un tableau`;for(let j=0;j<(prep.lines||[]).length;j++){const line=prep.lines[j],lp=`${path}.lines[${j}]`,le=validateItemBasics(line,lp,site);if(le)return le;const loc=validateLocation(line.emplacementErp,`${lp}.emplacementErp`);if(loc)return loc}}
+  return null;
+}
+function validateEvent(body,{headerContract,headerSite}){
+  if(headerContract!=="zonage-sync/1.1")return"X-AJI-Contract invalide";
+  const p=body.payload;
+  if(!isPlainObject(p))return"payload requis";
+  if(p.contractVersion!=="1.1")return"contractVersion non supportée";
+  const site=normalizeSite(p.siteCode);
+  if(!validSite(site))return"siteCode invalide";
+  if(site!==normalizeSite(headerSite))return"siteCode différent de X-AJI-Site";
+  if(!validOperationId(p.eventId))return"eventId invalide";
+  const collection=cleanString(p.collection,50);
+  if(!EVENT_COLLECTION_SET.has(collection))return"collection non supportée";
+  const entityId=cleanString(p.entityId,301);
+  if(!entityId||entityId.length>300)return"entityId invalide";
+  const mutation=cleanString(p.mutation,20).toLowerCase();
+  if(!["upsert","delete"].includes(mutation))return"mutation non supportée";
+  const revision=Number(p.revision),baseRevision=Number(p.baseRevision);
+  if(!Number.isInteger(revision)||revision<0)return"revision invalide";
+  if(!Number.isInteger(baseRevision)||baseRevision<0)return"baseRevision invalide";
+  if(revision<baseRevision)return"revision inférieure à baseRevision";
+  if(p.updatedAt!=null&&!Number.isFinite(Date.parse(p.updatedAt)))return"updatedAt invalide";
+  if(mutation==="delete"&&p.data!=null)return"data doit être null pour delete";
+  if(mutation==="upsert"){
+    if(!isPlainObject(p.data))return"data requise pour upsert";
+    if(p.data.siteCode!=null&&normalizeSite(p.data.siteCode)!==site)return"data.siteCode incohérent";
+    let error=null;
+    if(collection==="affectations"||collection==="inventoryCounts"||collection==="preparationLines")error=validateLocation(p.data.emplacementErp,`data.emplacementErp`);
+    if(collection==="inventorySessions"&&cleanString(p.data.mode,30).toLowerCase()==="annuel")error=validateLocation(p.data.scope,`data.scope`);
+    if(error)return error;
   }
   return null;
+}
+export function validateEnvelope(body,{headerContract,headerSite,maxRecords=HARD_MAX_RECORDS}={}){
+  if(!isPlainObject(body))return"Corps JSON requis";
+  if(!validOperationId(body.operationId))return"operationId invalide";
+  if(body.operation==="checkpoint")return validateCheckpoint(body,{headerContract,headerSite,maxRecords});
+  if(body.operation==="event")return validateEvent(body,{headerContract,headerSite});
+  return"operation non supportée";
 }
 export async function parseJsonRequest(request,maxBytes){
   const type=String(request.headers.get("content-type")||"").toLowerCase();
