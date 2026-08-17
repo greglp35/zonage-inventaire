@@ -1,6 +1,6 @@
 "use strict";
 (function(global){
-  const PARTS=Array.from({length:4},(_,i)=>`./assets/js/vendor/html5-qrcode.part${String(i+1).padStart(2,"0")}.b64`);
+  const PARTS=Array.from({length:16},(_,i)=>`./assets/js/vendor/html5-qrcode.part${String(i+1).padStart(2,"0")}.b64`);
   let promise=null;
   async function ensureHtml5Qrcode(){
     if(global.Html5Qrcode)return true;
