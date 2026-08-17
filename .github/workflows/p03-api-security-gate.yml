@@ -1,0 +1,119 @@
+name: P0.3 API Security Gate
+
+on:
+  push:
+    branches:
+      - p0/source-bbccdd-security-v3.3.3
+    paths:
+      - 'source-p0/api/aji-sync.js'
+      - 'source-p0/lib/api-security.mjs'
+      - 'source-p0/assets/js/services/sync.service.js'
+      - 'source-p0/tests/p03-api-security.mjs'
+      - 'source-p0/p0-sync-client-security.html'
+      - 'source-p0/docs/P0_3_API_SECURITY.md'
+      - '.github/workflows/p03-api-security-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p03-api-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Syntax checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check source-p0/lib/api-security.mjs
+          node --check source-p0/assets/js/services/sync.service.js
+          node --input-type=module --check < source-p0/api/aji-sync.js
+
+      - name: Assert Airtable secrets stay out of client sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -R -n -E 'AIRTABLE_TOKEN|AIRTABLE_BASE_ID|AIRTABLE_TABLE_' source-p0/assets source-p0/index.html; then
+            echo '::error title=P0.3 secret boundary::Référence Airtable serveur trouvée dans les sources client'
+            exit 1
+          fi
+
+      - name: Run API security contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp source-p0/api/aji-sync.js source-p0/api/aji-sync.test.mjs
+          trap 'rm -f source-p0/api/aji-sync.test.mjs' EXIT
+          node source-p0/tests/p03-api-security.mjs
+
+      - name: Detect Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "CHROME=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          elif command -v chromium >/dev/null 2>&1; then
+            echo "CHROME=$(command -v chromium)" >> "$GITHUB_ENV"
+          else
+            echo '::error title=P0.3 client gate::Chrome/Chromium absent du runner'
+            exit 1
+          fi
+
+      - name: Install CI-only Selenium harness
+        run: python3 -m pip install --disable-pip-version-check 'selenium>=4.28,<5'
+
+      - name: Start static server
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m http.server 8080 --bind 127.0.0.1 > /tmp/p03-http.log 2>&1 &
+          echo $! > /tmp/p03-http.pid
+          for i in {1..20}; do
+            if curl -fsS http://127.0.0.1:8080/source-p0/p0-sync-client-security.html >/dev/null; then exit 0; fi
+            sleep 0.25
+          done
+          cat /tmp/p03-http.log
+          exit 1
+
+      - name: Run browser client security gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.support.ui import WebDriverWait
+
+          profile=Path(os.environ['RUNNER_TEMP'])/'p03-client'
+          shutil.rmtree(profile,ignore_errors=True)
+          options=Options();options.binary_location=os.environ['CHROME']
+          for arg in ['--headless=new','--no-sandbox','--disable-gpu','--disable-dev-shm-usage',f'--user-data-dir={profile}']:
+              options.add_argument(arg)
+          driver=webdriver.Chrome(options=options)
+          try:
+              driver.get('http://127.0.0.1:8080/source-p0/p0-sync-client-security.html')
+              WebDriverWait(driver,25).until(lambda d:d.title.startswith('PASS') or d.title.startswith('FAIL'))
+              text=driver.find_element(By.ID,'result').text
+              print(driver.title);print(text)
+              if driver.title!='PASS P0.3 CLIENT':
+                  raise AssertionError(text)
+          finally:
+              driver.quit()
+          PY
+
+      - name: Stop static server
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/p03-http.pid ]; then kill "$(cat /tmp/p03-http.pid)" || true; fi

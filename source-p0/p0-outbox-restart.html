@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>P0.2 Restart</title></head>
+<body><pre id="result">RUNNING</pre>
+<script src="./assets/js/services/local-data.service.js"></script>
+<script>
+(async()=>{
+  const S=window.AJILocalDataService;
+  const phase=new URLSearchParams(location.search).get('phase')||'verify';
+  const ok=(condition,label)=>{if(!condition)throw new Error(label)};
+  const result=document.getElementById('result');
+
+  if(phase==='seed'){
+    await S.resetForTest().catch(()=>{});
+    for(let i=1;i<=18;i++){
+      await S.enqueue({opId:`restart-${i}`,eventId:`restart-evt-${i}`,collection:'counts',entityId:String(i),mutation:'upsert',payload:{count:i},revision:1,createdAt:new Date(1700001000000+i*1000).toISOString()});
+    }
+    await S.saveEntity({collection:'articles',entityId:'A-RESTART',revision:1,updatedAt:'2026-08-17T13:00:19.000Z',data:{designation:'Persiste'}},{opId:'restart-save',eventId:'restart-save',createdAt:'2026-08-17T13:00:19.000Z'});
+    await S.deleteEntity('articles','A-RESTART',{revision:2,opId:'restart-delete',eventId:'restart-delete',deletedAt:'2026-08-17T13:00:20.000Z'});
+    await S.setMeta('restart-proof',{seeded:true});
+    ok(await S.countOutbox('pending')===20,'seed pending doit valoir 20');
+    ok(!(await S.getEntity('articles','A-RESTART')),'entité supprimée avant redémarrage');
+    ok((await S.getTombstone('articles','A-RESTART'))?.revision===2,'tombstone créé avant redémarrage');
+    result.textContent='PASS SEED pending=20';
+    document.title='PASS P0.2 SEED';
+    return;
+  }
+
+  const pending=await S.countOutbox('pending');
+  const meta=await S.getMeta('restart-proof');
+  const tomb=await S.getTombstone('articles','A-RESTART');
+  const entity=await S.getEntity('articles','A-RESTART');
+  ok(pending===20,`après redémarrage pending=${pending}, attendu 20`);
+  ok(meta?.value?.seeded===true,'meta IndexedDB absente après redémarrage');
+  ok(!entity,'entité supprimée réapparue après redémarrage');
+  ok(tomb?.revision===2,'tombstone absent après redémarrage');
+  const batch=await S.listOutbox({status:'pending',limit:100});
+  ok(batch.length===20,'replay après redémarrage ne retourne pas 20 opérations');
+  for(const item of batch)await S.ack(item.opId);
+  ok(await S.countOutbox('pending')===0,'ACK après redémarrage ne vide pas exactement la file');
+  result.textContent='PASS VERIFY persisted=20 acked=20';
+  document.title='PASS P0.2 VERIFY';
+})().catch(err=>{
+  document.getElementById('result').textContent='FAIL\n'+(err&&err.stack||err);
+  document.title='FAIL P0.2 RESTART';
+});
+</script>
+</body></html>

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>P0.2 Cache rotation</title></head>
+<body><pre id="result">RUNNING cache rotation</pre>
+<script src="./assets/js/services/local-data.service.js"></script>
+<script>
+(async()=>{
+  const result=document.getElementById('result');
+  const S=window.AJILocalDataService;
+  const assert=(condition,label)=>{if(!condition)throw new Error(label)};
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+  await S.resetForTest();
+  await S.enqueue({opId:'cache-op-1',eventId:'cache-evt-1',collection:'counts',entityId:'1',mutation:'upsert',payload:{count:1},revision:1});
+  await S.saveEntity({collection:'articles',entityId:'CACHE-A1',revision:1,data:{designation:'Cache proof'}},{opId:'cache-save',eventId:'cache-save'});
+  await S.deleteEntity('articles','CACHE-A1',{revision:2,opId:'cache-delete',eventId:'cache-delete'});
+  await S.setMeta('cache-rotation-proof',{seeded:true});
+  assert(await S.countOutbox('pending')===3,'3 opérations doivent être présentes avant rotation');
+  assert((await S.getTombstone('articles','CACHE-A1'))?.revision===2,'tombstone absent avant rotation');
+
+  const oldName='aji-p0-old-proof';
+  const oldCache=await caches.open(oldName);
+  await oldCache.put('./p0-old-proof.txt',new Response('old'));
+  assert((await caches.keys()).includes(oldName),'ancien cache non créé');
+
+  const registration=await navigator.serviceWorker.register('./sw.js');
+  await navigator.serviceWorker.ready;
+  await registration.update().catch(()=>{});
+  for(let i=0;i<50&&(await caches.keys()).includes(oldName);i++)await sleep(100);
+
+  const keys=await caches.keys();
+  assert(!keys.includes(oldName),'ancien cache non supprimé par activation SW');
+  assert(await S.countOutbox('pending')===3,'rotation cache a modifié l’outbox IndexedDB');
+  assert((await S.getTombstone('articles','CACHE-A1'))?.revision===2,'rotation cache a supprimé le tombstone');
+  assert((await S.getMeta('cache-rotation-proof'))?.value?.seeded===true,'rotation cache a supprimé meta');
+
+  result.textContent='PASS CACHE ROTATION old-cache-removed indexeddb-preserved';
+  document.title='PASS P0.2 CACHE';
+})().catch(err=>{
+  document.getElementById('result').textContent='FAIL CACHE ROTATION\n'+(err&&err.stack||err);
+  document.title='FAIL P0.2 CACHE';
+});
+</script>
+</body></html>

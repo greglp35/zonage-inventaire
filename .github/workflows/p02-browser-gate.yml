@@ -1,0 +1,119 @@
+name: P0.2 Browser Gate
+
+on:
+  push:
+    branches:
+      - p0/source-bbccdd-security-v3.3.3
+    paths:
+      - 'source-p0/assets/js/services/local-data.service.js'
+      - 'source-p0/p0-outbox-smoke.html'
+      - 'source-p0/p0-outbox-restart.html'
+      - 'source-p0/p0-cache-rotation.html'
+      - '.github/workflows/p02-browser-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p02-browser-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Syntax check
+        run: node --check source-p0/assets/js/services/local-data.service.js
+
+      - name: Detect Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "CHROME=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          elif command -v chromium >/dev/null 2>&1; then
+            echo "CHROME=$(command -v chromium)" >> "$GITHUB_ENV"
+          else
+            echo "::error title=P0.2 browser gate::Chrome/Chromium absent du runner"
+            exit 1
+          fi
+
+      - name: Install CI-only Selenium harness
+        run: python3 -m pip install --disable-pip-version-check 'selenium>=4.28,<5'
+
+      - name: Start static server
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m http.server 8080 --bind 127.0.0.1 > /tmp/p02-http.log 2>&1 &
+          echo $! > /tmp/p02-http.pid
+          for i in {1..20}; do
+            if curl -fsS http://127.0.0.1:8080/source-p0/p0-outbox-smoke.html >/dev/null; then exit 0; fi
+            sleep 0.25
+          done
+          cat /tmp/p02-http.log
+          exit 1
+
+      - name: Run browser P0.2 gates
+        env:
+          BASE_URL: http://127.0.0.1:8080/source-p0
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, shutil, time
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.support.ui import WebDriverWait
+
+          chrome = os.environ['CHROME']
+          base = os.environ['BASE_URL']
+          root = Path(os.environ['RUNNER_TEMP']) / 'p02-selenium'
+          shutil.rmtree(root, ignore_errors=True)
+          root.mkdir(parents=True, exist_ok=True)
+
+          def execute(url, profile_name, expected_title):
+              profile = root / profile_name
+              options = Options()
+              options.binary_location = chrome
+              options.add_argument('--headless=new')
+              options.add_argument('--no-sandbox')
+              options.add_argument('--disable-gpu')
+              options.add_argument('--disable-dev-shm-usage')
+              options.add_argument(f'--user-data-dir={profile}')
+              driver = webdriver.Chrome(options=options)
+              try:
+                  driver.get(url)
+                  WebDriverWait(driver, 30).until(
+                      lambda d: d.title.startswith('PASS') or d.title.startswith('FAIL')
+                  )
+                  title = driver.title
+                  text = driver.find_element(By.ID, 'result').text
+                  print(f'URL={url}')
+                  print(f'TITLE={title}')
+                  print(text)
+                  if title != expected_title:
+                      raise AssertionError(f'{expected_title!r} attendu, obtenu {title!r}: {text}')
+              finally:
+                  driver.quit()
+                  time.sleep(0.5)
+
+          execute(f'{base}/p0-outbox-smoke.html', 'smoke', 'PASS P0.2')
+          execute(f'{base}/p0-outbox-restart.html?phase=seed', 'restart', 'PASS P0.2 SEED')
+          execute(f'{base}/p0-outbox-restart.html?phase=verify', 'restart', 'PASS P0.2 VERIFY')
+          execute(f'{base}/p0-cache-rotation.html', 'cache-rotation', 'PASS P0.2 CACHE')
+          print('P0.2_BROWSER_GATE=PASS')
+          PY
+
+      - name: Stop static server
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/p02-http.pid ]; then kill "$(cat /tmp/p02-http.pid)" || true; fi

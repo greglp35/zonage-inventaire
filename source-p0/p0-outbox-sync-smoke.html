@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>P0.4 Outbox Sync</title></head>
+<body><pre id="result">RUNNING</pre>
+<script src="./assets/js/services/local-data.service.js"></script>
+<script src="./assets/js/services/sync.service.js"></script>
+<script src="./assets/js/services/outbox-sync.service.js"></script>
+<script>
+(async()=>{
+  const out=[];const assert=(c,l)=>{if(!c)throw new Error(l);out.push('PASS '+l)};
+  const L=window.AJILocalDataService,S=window.AJISyncService,T=window.AJIOutboxSyncService;
+  localStorage.clear();sessionStorage.clear();await L.resetForTest();
+  S.configure({endpoint:'/api/aji-sync',siteCode:'BR',syncKey:'BR_0123456789abcdef0123456789'});
+
+  // baseRevision automatique.
+  let saved=await L.saveEntity({collection:'affectations',entityId:'A-REV',revision:3,data:{articleCode:'ART',emplacementErp:'010203'}},{opId:'rev-create',eventId:'rev-create'});
+  assert(saved.baseRevision===0&&saved.operation.baseRevision===0,'création baseRevision=0');
+  await L.ack('rev-create');
+  saved=await L.saveEntity({collection:'affectations',entityId:'A-REV',revision:4,data:{articleCode:'ART',emplacementErp:'010204'}},{opId:'rev-update',eventId:'rev-update'});
+  assert(saved.baseRevision===3&&saved.operation.baseRevision===3,'mise à jour capture la révision précédente');
+  await L.ack('rev-update');
+  const deleted=await L.deleteEntity('affectations','A-REV',{revision:5,opId:'rev-delete',eventId:'rev-delete'});
+  assert(deleted.baseRevision===4&&deleted.operation.baseRevision===4,'delete capture la révision précédente');
+  await L.ack('rev-delete');
+
+  // 20 événements, ACK exact et ordre FIFO.
+  await L.resetForTest();
+  for(let i=1;i<=20;i++)await L.enqueue({opId:`sync-${String(i).padStart(2,'0')}`,eventId:`event-${String(i).padStart(2,'0')}`,collection:'inventoryCounts',entityId:`COUNT-${i}`,mutation:'upsert',payload:{articleCode:`A${i}`,emplacementErp:'010203',counted:i},revision:1,baseRevision:0,createdAt:new Date(1700010000000+i*1000).toISOString()});
+  const seen=[];
+  window.fetch=async(url,init)=>{const body=JSON.parse(init.body);seen.push(body);return new Response(JSON.stringify({ok:true,eventId:body.payload.eventId}),{status:200,headers:{'content-type':'application/json'}})};
+  let summary=await T.flush({force:true,scheduleRetry:false,limit:100});
+  assert(summary.acked===20&&summary.remaining===0,'20 événements ACKés individuellement');
+  assert(seen.length===20&&seen[0].payload.eventId==='event-01'&&seen[19].payload.eventId==='event-20','ordre FIFO conservé');
+  assert(seen.every(x=>x.operation==='event'&&x.payload.contractVersion==='1.1'),'contrat événement 1.1 envoyé');
+
+  // 503 : pending + tentative, puis reprise 200.
+  await L.resetForTest();
+  await L.enqueue({opId:'retry-op',eventId:'retry-event',collection:'affectations',entityId:'A-RETRY',mutation:'upsert',payload:{articleCode:'R',emplacementErp:'010203'},revision:1,baseRevision:0});
+  let calls=0;
+  window.fetch=async()=>{calls++;return new Response(JSON.stringify({ok:false,code:'TEMPORARY'}),{status:calls===1?503:200,headers:{'content-type':'application/json'}})};
+  summary=await T.flush({force:true,scheduleRetry:false});
+  let retryItem=await L.getOutbox('retry-op');
+  assert(summary.retry===1&&retryItem.status==='pending'&&retryItem.attempts===1&&!!retryItem.nextAttemptAt,'503 conserve pending avec backoff');
+  summary=await T.flush({force:true,scheduleRetry:false});
+  assert(summary.acked===1&&await L.countOutbox('pending')===0,'reprise 200 ACKe sans doublon');
+
+  // 409 : blocked et aucun retry infini.
+  await L.resetForTest();
+  await L.enqueue({opId:'conflict-op',eventId:'conflict-event',collection:'affectations',entityId:'A-CONFLICT',mutation:'upsert',payload:{articleCode:'C',emplacementErp:'010203'},revision:4,baseRevision:2});
+  calls=0;window.fetch=async()=>{calls++;return new Response(JSON.stringify({ok:false,code:'REVISION_CONFLICT'}),{status:409,headers:{'content-type':'application/json'}})};
+  summary=await T.flush({force:true,scheduleRetry:false});
+  const blocked=await L.getOutbox('conflict-op');
+  assert(summary.blocked===1&&blocked.status==='blocked'&&await L.countOutbox('pending')===0,'409 bascule blocked sans ACK');
+  await T.flush({force:true,scheduleRetry:false});
+  assert(calls===1,'blocked non rejoué au flush suivant');
+
+  // Exception réseau : pending, jamais ACK.
+  await L.resetForTest();
+  await L.enqueue({opId:'network-op',eventId:'network-event',collection:'preparations',entityId:'P1',mutation:'upsert',payload:{orderNumber:'CMD1'},revision:1,baseRevision:0});
+  window.fetch=async()=>{throw new TypeError('offline')};
+  summary=await T.flush({force:true,scheduleRetry:false});
+  assert(summary.retry===1&&await L.countOutbox('pending')===1,'exception réseau conserve l’événement');
+
+  assert(T.classify(429)==='retry'&&T.classify(503)==='retry'&&T.classify(400)==='blocked'&&T.classify(409)==='blocked'&&T.classify(200)==='ack','classification HTTP déterministe');
+  assert(T.computeBackoff(1,'',0)===1000&&T.computeBackoff(3,'',0)===4000&&T.computeBackoff(2,'5',0)===5000,'backoff borné et Retry-After respecté');
+
+  document.getElementById('result').textContent='PASS\n'+out.join('\n');document.title='PASS P0.4 OUTBOX';
+})().catch(err=>{document.getElementById('result').textContent='FAIL\n'+(err&&err.stack||err);document.title='FAIL P0.4 OUTBOX'});
+</script></body></html>
