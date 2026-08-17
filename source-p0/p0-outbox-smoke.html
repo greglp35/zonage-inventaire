@@ -18,10 +18,11 @@
   assert(batch.length===20,'replay retourne les 20 opérations');
   assert(batch[0].opId==='op-1'&&batch[19].opId==='op-20','ordre FIFO stable par createdAt');
 
-  await S.enqueue({opId:'op-1',eventId:'evt-1',collection:'counts',entityId:'1',mutation:'upsert',payload:{count:999},revision:2});
-  assert(await S.countOutbox('pending')===20,'opId dupliqué ne crée pas de doublon');
-  await S.enqueue({opId:'op-duplicate-event',eventId:'evt-1',collection:'counts',entityId:'1',mutation:'upsert',payload:{count:999},revision:2});
-  assert(await S.countOutbox('pending')===20,'eventId dupliqué ne crée pas de doublon');
+  const dupOp=await S.enqueue({opId:'op-1',eventId:'evt-1',collection:'counts',entityId:'1',mutation:'upsert',payload:{count:999},revision:2});
+  assert(dupOp.duplicate===true&&await S.countOutbox('pending')===20,'opId dupliqué ne crée pas de doublon');
+  const dupEvent=await S.enqueue({opId:'op-duplicate-event',eventId:'evt-1',collection:'counts',entityId:'1',mutation:'upsert',payload:{count:999},revision:2});
+  assert(dupEvent.duplicate===true&&await S.countOutbox('pending')===20,'eventId dupliqué ne crée pas de doublon');
+  assert((await S.getOutbox('op-1')).payload.count===1,'retry ne remplace pas le payload original');
 
   const attempt=await S.markAttempt('op-1','offline');
   assert(attempt.attempts===1&&attempt.lastError==='offline','tentative et erreur conservées');
@@ -29,17 +30,26 @@
   for(const item of await S.listOutbox({status:'pending',limit:100}))await S.ack(item.opId);
   assert(await S.countOutbox('pending')===0,'ACK retire exactement les opérations traitées');
 
-  await S.saveEntity({collection:'articles',entityId:'A1',revision:3,data:{designation:'Test'}});
+  await S.saveEntity({collection:'articles',entityId:'A1',revision:3,data:{designation:'Test'}},{opId:'save-A1',eventId:'evt-save-A1'});
   assert((await S.getEntity('articles','A1')).revision===3,'entité locale persistée');
-  await S.deleteEntity('articles','A1',{revision:4,opId:'del-A1',eventId:'del-A1'});
+  const duplicateMutation=await S.saveEntity({collection:'articles',entityId:'A1',revision:99,data:{designation:'NE DOIT PAS PASSER'}},{opId:'save-A1-retry',eventId:'evt-save-A1'});
+  const afterDuplicate=await S.getEntity('articles','A1');
+  assert(duplicateMutation.duplicate===true&&afterDuplicate.revision===3&&afterDuplicate.data.designation==='Test','eventId rejoué ne réapplique pas la mutation locale');
+
+  await S.deleteEntity('articles','A1',{revision:4,opId:'del-A1',eventId:'evt-del-A1'});
   assert(!(await S.getEntity('articles','A1')),'suppression retire entité courante');
   const tomb=await S.getTombstone('articles','A1');
   assert(tomb&&tomb.revision===4,'tombstone persistant créé');
+  const duplicateDelete=await S.deleteEntity('articles','A1',{revision:50,opId:'del-A1-retry',eventId:'evt-del-A1'});
+  assert(duplicateDelete.duplicate===true&&(await S.getTombstone('articles','A1')).revision===4,'delete rejoué ne réécrit pas le tombstone');
 
   let r=S.resolveConflict({revision:5,updatedAt:'2026-08-17T10:00:00Z',value:'L'},{revision:4,updatedAt:'2026-08-17T12:00:00Z',value:'R'});
   assert(r.source==='local'&&r.reason==='higher_revision','conflit: révision supérieure gagne');
   r=S.resolveConflict({revision:5,updatedAt:'2026-08-17T10:00:00Z',value:'L'},{revision:5,updatedAt:'2026-08-17T12:00:00Z',value:'R'});
   assert(r.source==='remote'&&r.reason==='newer_updatedAt','conflit: updatedAt départage à révision égale');
+  const tie1=S.resolveConflict({revision:5,updatedAt:'2026-08-17T12:00:00Z',value:'A'},{revision:5,updatedAt:'2026-08-17T12:00:00Z',value:'B'});
+  const tie2=S.resolveConflict({revision:5,updatedAt:'2026-08-17T12:00:00Z',value:'A'},{revision:5,updatedAt:'2026-08-17T12:00:00Z',value:'B'});
+  assert(tie1.source===tie2.source&&tie1.reason==='stable_tiebreak','conflit: tie-break stable et reproductible');
 
   document.getElementById('result').textContent='PASS\n'+out.join('\n');
   document.title='PASS P0.2';
