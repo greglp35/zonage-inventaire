@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AJI P0 Smoke</title></head>
+<body>
+<main><h1>AJI P0 — smoke test navigateur</h1><pre id="out">Exécution…</pre></main>
+<script src="../assets/js/services/tfi-location.service.js"></script>
+<script src="../assets/js/services/storage.service.js"></script>
+<script src="../assets/js/services/scanner.service.js"></script>
+<script src="../assets/js/services/sync.service.js"></script>
+<script>
+(async()=>{
+  const results=[];
+  const test=(name,ok,detail="")=>results.push({name,ok:!!ok,detail});
+
+  test("BBCCDD legacy → canonique", AJITfiLocation.normalize("01-02-03")==="010203", AJITfiLocation.normalize("01-02-03"));
+  test("BBCCDD canonique → affichage", AJITfiLocation.format("010203")==="01-02-03", AJITfiLocation.format("010203"));
+
+  const snap=AJIStorageService.prepareSnapshot({revision:7,lastChange:"2026-08-17T00:00:00Z",value:"ok"});
+  test("Snapshot intégrité", AJIStorageService.verifySnapshot(snap).ok, snap._integrity?.hash||"");
+
+  const native=await AJIScannerService.nativeReady();
+  test("ScannerService chargé", Array.isArray(AJIScannerService.TARGET_FORMATS)&&AJIScannerService.TARGET_FORMATS.includes("ean_13"), JSON.stringify(native));
+
+  localStorage.removeItem("aji_sync_config_v2");
+  localStorage.removeItem("aji_sync_config_v1");
+  sessionStorage.removeItem("aji_sync_session_key_v1");
+  AJISyncService.configure({endpoint:"/api/aji-sync",siteCode:"BR",syncKey:"SMOKE_SECRET"});
+  const persistent=localStorage.getItem("aji_sync_config_v2")||"";
+  const session=sessionStorage.getItem("aji_sync_session_key_v1")||"";
+  test("Secret absent du localStorage", !persistent.includes("SMOKE_SECRET"), persistent);
+  test("Secret limité à la session", session==="SMOKE_SECRET", session?"présent en sessionStorage":"absent");
+  test("Sync BBCCDD", AJISyncService.normalizeTfiLocation("01-02-03")==="010203", AJISyncService.normalizeTfiLocation("01-02-03"));
+
+  const pass=results.every(r=>r.ok);
+  document.getElementById("out").textContent=(pass?"PASS":"FAIL")+"\n\n"+results.map(r=>`${r.ok?"✓":"✗"} ${r.name}${r.detail?" — "+r.detail:""}`).join("\n");
+  document.title=`${pass?"PASS":"FAIL"} — AJI P0 Smoke`;
+})();
+</script>
+</body>
+</html>
