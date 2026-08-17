@@ -18,6 +18,7 @@
     if(global.Html5Qrcode)return"déjà chargé";
     if(fallbackPromise)return fallbackPromise;
     fallbackPromise=(async()=>{
+      if(global.AJIVendorLoader?.ensureHtml5Qrcode){await global.AJIVendorLoader.ensureHtml5Qrcode();return"vendor pack local"}
       let lastErr=null;
       for(const url of FALLBACK_URLS){try{await loadScript(url);if(global.Html5Qrcode)return url}catch(e){lastErr=e}}
       throw lastErr||new Error("Moteur scanner fallback indisponible");
