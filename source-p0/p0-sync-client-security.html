@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>P0.3 Client Security</title></head>
+<body><pre id="result">RUNNING</pre>
+<script src="./assets/js/services/sync.service.js"></script>
+<script>
+(async()=>{
+  const out=[];const assert=(c,l)=>{if(!c)throw new Error(l);out.push('PASS '+l)};const S=window.AJISyncService;
+  localStorage.clear();sessionStorage.clear();
+  let blocked=false;try{S.configure({endpoint:'https://evil.example/api',siteCode:'BR',syncKey:'BR_0123456789abcdef0123456789'})}catch{blocked=true}
+  assert(blocked,'endpoint cross-origin refusé avant fetch');
+  const cfg=S.configure({endpoint:'/api/aji-sync',siteCode:'BR',syncKey:'BR_0123456789abcdef0123456789'});
+  assert(cfg.endpoint==='/api/aji-sync','endpoint same-origin accepté');
+  assert(cfg.siteCode==='BR','site normalisé');
+  const persistent=localStorage.getItem('aji_sync_config_v3')||'';
+  assert(!persistent.includes('0123456789abcdef'),'credential absent du localStorage');
+  assert(sessionStorage.getItem('aji_sync_site_key_v1')==='BR_0123456789abcdef0123456789','credential limité à sessionStorage');
+
+  let captured=null;
+  window.fetch=async(url,init)=>{captured={url:String(url),init};return new Response(JSON.stringify({ok:true}),{status:200,headers:{'content-type':'application/json'}})};
+  await S.enqueueCheckpoint({revision:1,lastChange:'2026-08-17T14:00:00Z',zonage:[],inventaireSessions:[],inventaire:[],preparations:[]});
+  for(let i=0;i<50&&!captured;i++)await new Promise(r=>setTimeout(r,20));
+  assert(!!captured,'fetch façade déclenché');
+  assert(new URL(captured.url).origin===location.origin,'fetch reste same-origin');
+  assert(captured.init.headers['X-AJI-Site']==='BR','header X-AJI-Site envoyé');
+  assert(captured.init.headers['X-AJI-Sync-Key']==='BR_0123456789abcdef0123456789','credential session envoyé uniquement à la façade same-origin');
+  assert(captured.init.credentials==='same-origin','credentials fetch limités au same-origin');
+  document.getElementById('result').textContent='PASS\n'+out.join('\n');document.title='PASS P0.3 CLIENT';
+})().catch(err=>{document.getElementById('result').textContent='FAIL\n'+(err&&err.stack||err);document.title='FAIL P0.3 CLIENT'});
+</script></body></html>
