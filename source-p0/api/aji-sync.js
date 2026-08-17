@@ -40,7 +40,9 @@ function corsHeaders(request) {
 function json(data, status = 200, extra = {}, request = null) {
   const cors=corsHeaders(request);
   if(cors===null) return new Response(JSON.stringify({ok:false,code:"ORIGIN_NOT_ALLOWED"}),{status:403,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
-  return new Response(JSON.stringify(data), {status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store",...(cors||{}),...extra}});
+  const headers={"cache-control":"no-store",...(cors||{}),...extra};
+  if(status===204) return new Response(null,{status,headers});
+  return new Response(JSON.stringify(data), {status,headers:{"content-type":"application/json; charset=utf-8",...headers}});
 }
 function toNumber(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function cleanString(v, max = 500) { return String(v ?? "").trim().slice(0, max); }
@@ -176,15 +178,24 @@ async function handlePost(request) {
   const siteCode = payload.siteCode;
   const revision = Number(payload.revision);
   const already = await findJournalByOperation(token, operationId);
-  if (already?.fields?.Statut === "synced") return json({ ok: true, idempotent: true, operationId, revision, results: {} }, 200, {}, request);
+  if (already?.fields?.Statut === "synced") {
+    return json({ ok: true, idempotent: true, operationId, revision, results: {} }, 200, {}, request);
+  }
 
   const last = await highestRevisionForSite(token, siteCode);
   if (last && (last.revision > revision || (last.revision === revision && last.operationId !== operationId))) {
     await writeJournal(token, {
-      "Cle Operation": operationId, "Site Code": siteCode, "Entite": "checkpoint", "Cle Externe": operationId,
-      "Operation": "checkpoint", "Revision": revision, "Statut": "conflict", "Tentatives": 1,
+      "Cle Operation": operationId,
+      "Site Code": siteCode,
+      "Entite": "checkpoint",
+      "Cle Externe": operationId,
+      "Operation": "checkpoint",
+      "Revision": revision,
+      "Statut": "conflict",
+      "Tentatives": 1,
       "Derniere Erreur": `Révision distante ${last.revision} (${last.operationId}) >= révision reçue ${revision}`,
-      "Cree Le": new Date().toISOString(), "Traite Le": new Date().toISOString()
+      "Cree Le": new Date().toISOString(),
+      "Traite Le": new Date().toISOString()
     });
     return json({ ok: false, code: "REVISION_CONFLICT", remoteRevision: last.revision }, 409, {}, request);
   }
@@ -199,19 +210,36 @@ async function handlePost(request) {
     results.inventoryCounts = await upsertMany(token, TABLES.inventoryCounts, safeArray(payload.inventoryCounts));
     results.preparations = await upsertMany(token, TABLES.preparations, preparations);
     results.preparationLines = await upsertMany(token, TABLES.preparationLines, lines);
+
     await writeJournal(token, {
-      "Cle Operation": operationId, "Site Code": siteCode, "Entite": "checkpoint", "Cle Externe": operationId,
-      "Operation": "checkpoint", "Revision": revision, "Statut": "synced", "Tentatives": 1, "Derniere Erreur": "",
-      "Cree Le": startedAt, "Traite Le": new Date().toISOString()
+      "Cle Operation": operationId,
+      "Site Code": siteCode,
+      "Entite": "checkpoint",
+      "Cle Externe": operationId,
+      "Operation": "checkpoint",
+      "Revision": revision,
+      "Statut": "synced",
+      "Tentatives": 1,
+      "Derniere Erreur": "",
+      "Cree Le": startedAt,
+      "Traite Le": new Date().toISOString()
     });
     return json({ ok: true, operationId, revision, results }, 200, {}, request);
   } catch (err) {
     const message = cleanString(err?.message || err, 4000);
     try {
       await writeJournal(token, {
-        "Cle Operation": operationId, "Site Code": siteCode, "Entite": "checkpoint", "Cle Externe": operationId,
-        "Operation": "checkpoint", "Revision": revision, "Statut": "error", "Tentatives": 1,
-        "Derniere Erreur": message, "Cree Le": startedAt, "Traite Le": new Date().toISOString()
+        "Cle Operation": operationId,
+        "Site Code": siteCode,
+        "Entite": "checkpoint",
+        "Cle Externe": operationId,
+        "Operation": "checkpoint",
+        "Revision": revision,
+        "Statut": "error",
+        "Tentatives": 1,
+        "Derniere Erreur": message,
+        "Cree Le": startedAt,
+        "Traite Le": new Date().toISOString()
       });
     } catch {}
     return json({ ok: false, code: "AIRTABLE_WRITE_FAILED", message }, 502, {}, request);
@@ -236,7 +264,8 @@ export default {
       return json({
         ok: true, service: "aji-zonage-sync", version: SERVICE_VERSION,
         airtableConfigured: Boolean(process.env.AIRTABLE_TOKEN) && missingAirtableConfig().length===0,
-        syncKeyConfigured: Boolean(process.env.AJI_SYNC_KEY), contract: "zonage-sync/1.0"
+        syncKeyConfigured: Boolean(process.env.AJI_SYNC_KEY),
+        contract: "zonage-sync/1.0"
       },200,{},request);
     }
     if (request.method !== "POST") return json({ ok: false, code: "METHOD_NOT_ALLOWED" }, 405, { allow: "GET,POST,OPTIONS" }, request);
