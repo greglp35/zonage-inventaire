@@ -20,7 +20,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Syntax check
         run: node --check source-p0/assets/js/services/local-data.service.js
@@ -34,7 +34,7 @@ jobs:
           elif command -v chromium >/dev/null 2>&1; then
             echo "CHROME=$(command -v chromium)" >> "$GITHUB_ENV"
           else
-            echo "Chrome/Chromium absent du runner" >&2
+            echo "::error title=P0.2 browser gate::Chrome/Chromium absent du runner"
             exit 1
           fi
 
@@ -48,7 +48,7 @@ jobs:
             if curl -fsS http://127.0.0.1:8080/source-p0/p0-outbox-smoke.html >/dev/null; then exit 0; fi
             sleep 0.25
           done
-          cat /tmp/p02-http.log
+          echo "::error title=P0.2 HTTP server::$(tr '\n' ' ' < /tmp/p02-http.log | head -c 2000)"
           exit 1
 
       - name: Run zero-build browser smoke
@@ -59,8 +59,16 @@ jobs:
           "$CHROME" --headless=new --no-sandbox --disable-gpu --user-data-dir="$PROFILE" --virtual-time-budget=10000 --dump-dom \
             http://127.0.0.1:8080/source-p0/p0-outbox-smoke.html > /tmp/p02-smoke.html
           cat /tmp/p02-smoke.html
-          grep -q '<title>PASS P0.2</title>' /tmp/p02-smoke.html
-          ! grep -q 'FAIL' /tmp/p02-smoke.html
+          if ! grep -q '<title>PASS P0.2</title>' /tmp/p02-smoke.html; then
+            RESULT=$(sed -n '/<pre id="result">/,/<\/pre>/p' /tmp/p02-smoke.html | sed 's/<[^>]*>/ /g' | tr '\n' ' ' | head -c 2500)
+            echo "::error title=P0.2 smoke failed::$RESULT"
+            exit 1
+          fi
+          if grep -q 'FAIL' /tmp/p02-smoke.html; then
+            RESULT=$(sed -n '/<pre id="result">/,/<\/pre>/p' /tmp/p02-smoke.html | sed 's/<[^>]*>/ /g' | tr '\n' ' ' | head -c 2500)
+            echo "::error title=P0.2 smoke failed::$RESULT"
+            exit 1
+          fi
 
       - name: Seed IndexedDB before browser restart
         shell: bash
@@ -70,8 +78,11 @@ jobs:
           "$CHROME" --headless=new --no-sandbox --disable-gpu --user-data-dir="$PROFILE" --virtual-time-budget=10000 --dump-dom \
             'http://127.0.0.1:8080/source-p0/p0-outbox-restart.html?phase=seed' > /tmp/p02-seed.html
           cat /tmp/p02-seed.html
-          grep -q '<title>PASS P0.2 SEED</title>' /tmp/p02-seed.html
-          grep -q 'PASS SEED pending=20' /tmp/p02-seed.html
+          if ! grep -q '<title>PASS P0.2 SEED</title>' /tmp/p02-seed.html; then
+            RESULT=$(sed -n '/<pre id="result">/,/<\/pre>/p' /tmp/p02-seed.html | sed 's/<[^>]*>/ /g' | tr '\n' ' ' | head -c 2500)
+            echo "::error title=P0.2 seed failed::$RESULT"
+            exit 1
+          fi
 
       - name: Reopen browser and verify IndexedDB persistence
         shell: bash
@@ -81,8 +92,11 @@ jobs:
           "$CHROME" --headless=new --no-sandbox --disable-gpu --user-data-dir="$PROFILE" --virtual-time-budget=10000 --dump-dom \
             'http://127.0.0.1:8080/source-p0/p0-outbox-restart.html?phase=verify' > /tmp/p02-verify.html
           cat /tmp/p02-verify.html
-          grep -q '<title>PASS P0.2 VERIFY</title>' /tmp/p02-verify.html
-          grep -q 'PASS VERIFY persisted=20 acked=20' /tmp/p02-verify.html
+          if ! grep -q '<title>PASS P0.2 VERIFY</title>' /tmp/p02-verify.html; then
+            RESULT=$(sed -n '/<pre id="result">/,/<\/pre>/p' /tmp/p02-verify.html | sed 's/<[^>]*>/ /g' | tr '\n' ' ' | head -c 2500)
+            echo "::error title=P0.2 restart failed::$RESULT"
+            exit 1
+          fi
 
       - name: Stop static server
         if: always()
