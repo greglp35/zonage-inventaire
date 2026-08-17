@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>P0.2 Outbox smoke</title></head>
+<body><pre id="result">RUNNING</pre>
+<script src="./assets/js/services/local-data.service.js"></script>
+<script>
+(async()=>{
+  const out=[];
+  const assert=(condition,label)=>{if(!condition)throw new Error(label);out.push('PASS '+label)};
+  const S=window.AJILocalDataService;
+  await S.resetForTest().catch(()=>{});
+
+  for(let i=1;i<=20;i++){
+    await S.enqueue({opId:'op-'+i,eventId:'evt-'+i,collection:'counts',entityId:String(i),mutation:'upsert',payload:{count:i},revision:1,createdAt:new Date(1700000000000+i*1000).toISOString()});
+  }
+  assert(await S.countOutbox('pending')===20,'20 opérations hors ligne persistées');
+  const batch=await S.listOutbox({status:'pending',limit:100});
+  assert(batch.length===20,'replay retourne les 20 opérations');
+  assert(batch[0].opId==='op-1'&&batch[19].opId==='op-20','ordre FIFO stable par createdAt');
+
+  await S.enqueue({opId:'op-1',eventId:'evt-1',collection:'counts',entityId:'1',mutation:'upsert',payload:{count:999},revision:2});
+  assert(await S.countOutbox('pending')===20,'opId dupliqué ne crée pas de doublon');
+  await S.enqueue({opId:'op-duplicate-event',eventId:'evt-1',collection:'counts',entityId:'1',mutation:'upsert',payload:{count:999},revision:2});
+  assert(await S.countOutbox('pending')===20,'eventId dupliqué ne crée pas de doublon');
+
+  const attempt=await S.markAttempt('op-1','offline');
+  assert(attempt.attempts===1&&attempt.lastError==='offline','tentative et erreur conservées');
+
+  for(const item of await S.listOutbox({status:'pending',limit:100}))await S.ack(item.opId);
+  assert(await S.countOutbox('pending')===0,'ACK retire exactement les opérations traitées');
+
+  await S.saveEntity({collection:'articles',entityId:'A1',revision:3,data:{designation:'Test'}});
+  assert((await S.getEntity('articles','A1')).revision===3,'entité locale persistée');
+  await S.deleteEntity('articles','A1',{revision:4,opId:'del-A1',eventId:'del-A1'});
+  assert(!(await S.getEntity('articles','A1')),'suppression retire entité courante');
+  const tomb=await S.getTombstone('articles','A1');
+  assert(tomb&&tomb.revision===4,'tombstone persistant créé');
+
+  let r=S.resolveConflict({revision:5,updatedAt:'2026-08-17T10:00:00Z',value:'L'},{revision:4,updatedAt:'2026-08-17T12:00:00Z',value:'R'});
+  assert(r.source==='local'&&r.reason==='higher_revision','conflit: révision supérieure gagne');
+  r=S.resolveConflict({revision:5,updatedAt:'2026-08-17T10:00:00Z',value:'L'},{revision:5,updatedAt:'2026-08-17T12:00:00Z',value:'R'});
+  assert(r.source==='remote'&&r.reason==='newer_updatedAt','conflit: updatedAt départage à révision égale');
+
+  document.getElementById('result').textContent='PASS\n'+out.join('\n');
+  document.title='PASS P0.2';
+})().catch(err=>{
+  document.getElementById('result').textContent='FAIL\n'+(err&&err.stack||err);
+  document.title='FAIL P0.2';
+});
+</script>
+</body></html>
