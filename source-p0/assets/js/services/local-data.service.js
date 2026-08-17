@@ -69,7 +69,7 @@
   async function getTombstone(collection,entityId){return withStore(STORES.TOMBSTONES,"readonly",s=>requestResult(s[STORES.TOMBSTONES].get(entityKey(collection,entityId))))}
   async function setMeta(key,value){return withStore(STORES.META,"readwrite",s=>{const record={key:String(key),value:clone(value),updatedAt:now()};s[STORES.META].put(record);return record})}
   async function getMeta(key){return withStore(STORES.META,"readonly",s=>requestResult(s[STORES.META].get(String(key))))}
-  async function resetForTest(){const db=await openDb();db.close();return new Promise((resolve,reject)=>{const r=global.indexedDB.deleteDatabase(DB_NAME);r.onsuccess=()=>resolve(true);r.onerror=()=>reject(r.error||new Error("Suppression DB impossible"));r.onblocked=()=>reject(new Error("Suppression DB bloquée"))})}
+  async function resetForTest(){return withStore([STORES.ENTITIES,STORES.OUTBOX,STORES.TOMBSTONES,STORES.META],"readwrite",s=>{s[STORES.ENTITIES].clear();s[STORES.OUTBOX].clear();s[STORES.TOMBSTONES].clear();s[STORES.META].clear();return true})}
 
   global.AJILocalDataService={DB_NAME,DB_VERSION,STORES,createOpId,entityKey,normalizeOperation,resolveConflict,enqueue,getOutbox,listOutbox,countOutbox,markAttempt,ack,saveEntity,getEntity,deleteEntity,getTombstone,setMeta,getMeta,resetForTest};
 })(window);
