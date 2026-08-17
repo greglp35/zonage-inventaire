@@ -1,0 +1,8 @@
+"use strict";
+const CACHE="aji-p0-v3-3-3-20260817";
+const CORE=["./","./index.html","./manifest.webmanifest","./icon.svg","./assets/css/shell.css","./assets/js/shell-runtime.js","./assets/js/vendor/vendor-loader.js","./assets/js/services/tfi-location.service.js","./assets/js/services/storage.service.js","./assets/js/services/scanner.service.js","./assets/js/services/pwa.service.js","./assets/js/services/sync.service.js","./assets/js/vendor/html5-qrcode.part01.b64","./assets/js/vendor/html5-qrcode.part02.b64","./assets/js/vendor/html5-qrcode.part03.b64","./assets/js/vendor/html5-qrcode.part04.b64","./assets/js/vendor/LICENSE-html5-qrcode.txt"];
+self.addEventListener("install",event=>event.waitUntil((async()=>{const c=await caches.open(CACHE);await c.addAll(CORE);await self.skipWaiting()})()));
+self.addEventListener("activate",event=>event.waitUntil((async()=>{const keys=await caches.keys();await Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)));await self.clients.claim()})()));
+async function networkFirst(req){try{const r=await fetch(req);if(r?.ok){const c=await caches.open(CACHE);c.put(req,r.clone()).catch(()=>{})}return r}catch(e){return(await caches.match(req))||(await caches.match("./index.html"))||Promise.reject(e)}}
+async function cacheFirst(req){const hit=await caches.match(req);if(hit)return hit;const r=await fetch(req);if(r&&(r.ok||r.type==="opaque")){const c=await caches.open(CACHE);c.put(req,r.clone()).catch(()=>{})}return r}
+self.addEventListener("fetch",event=>{if(event.request.method!=="GET")return;event.respondWith(event.request.mode==="navigate"?networkFirst(event.request):cacheFirst(event.request))});
