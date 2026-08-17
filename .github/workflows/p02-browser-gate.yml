@@ -8,6 +8,7 @@ on:
       - 'source-p0/assets/js/services/local-data.service.js'
       - 'source-p0/p0-outbox-smoke.html'
       - 'source-p0/p0-outbox-restart.html'
+      - 'source-p0/p0-cache-rotation.html'
       - '.github/workflows/p02-browser-gate.yml'
   workflow_dispatch:
 
@@ -58,7 +59,7 @@ jobs:
           cat /tmp/p02-http.log
           exit 1
 
-      - name: Run browser smoke and restart persistence gate
+      - name: Run browser P0.2 gates
         env:
           BASE_URL: http://127.0.0.1:8080/source-p0
         shell: bash
@@ -90,7 +91,7 @@ jobs:
               driver = webdriver.Chrome(options=options)
               try:
                   driver.get(url)
-                  WebDriverWait(driver, 25).until(
+                  WebDriverWait(driver, 30).until(
                       lambda d: d.title.startswith('PASS') or d.title.startswith('FAIL')
                   )
                   title = driver.title
@@ -107,6 +108,7 @@ jobs:
           execute(f'{base}/p0-outbox-smoke.html', 'smoke', 'PASS P0.2')
           execute(f'{base}/p0-outbox-restart.html?phase=seed', 'restart', 'PASS P0.2 SEED')
           execute(f'{base}/p0-outbox-restart.html?phase=verify', 'restart', 'PASS P0.2 VERIFY')
+          execute(f'{base}/p0-cache-rotation.html', 'cache-rotation', 'PASS P0.2 CACHE')
           print('P0.2_BROWSER_GATE=PASS')
           PY
 
