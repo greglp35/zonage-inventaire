@@ -1,0 +1,112 @@
+name: P0.4 Sync Gate
+
+on:
+  push:
+    branches:
+      - p0/source-bbccdd-security-v3.3.3
+    paths:
+      - 'source-p0/assets/js/services/local-data.service.js'
+      - 'source-p0/assets/js/services/outbox-sync.service.js'
+      - 'source-p0/api/aji-sync.js'
+      - 'source-p0/lib/api-security.mjs'
+      - 'source-p0/tests/p04-event-api.mjs'
+      - 'source-p0/p0-outbox-sync-smoke.html'
+      - '.github/workflows/p04-sync-gate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p04-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Syntax checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check source-p0/assets/js/services/local-data.service.js
+          node --check source-p0/assets/js/services/outbox-sync.service.js
+          node --check source-p0/lib/api-security.mjs
+          node --input-type=module --check < source-p0/api/aji-sync.js
+          node --check source-p0/tests/p04-event-api.mjs
+
+      - name: Run event API tests with Airtable mock
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp source-p0/api/aji-sync.js source-p0/api/aji-sync.test.mjs
+          trap 'rm -f source-p0/api/aji-sync.test.mjs' EXIT
+          node source-p0/tests/p04-event-api.mjs
+
+      - name: Detect Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v google-chrome >/dev/null 2>&1; then
+            echo "CHROME=$(command -v google-chrome)" >> "$GITHUB_ENV"
+          elif command -v chromium >/dev/null 2>&1; then
+            echo "CHROME=$(command -v chromium)" >> "$GITHUB_ENV"
+          else
+            echo '::error title=P0.4 browser gate::Chrome/Chromium absent du runner'
+            exit 1
+          fi
+
+      - name: Install CI-only Selenium harness
+        run: python3 -m pip install --disable-pip-version-check 'selenium>=4.28,<5'
+
+      - name: Start static server
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m http.server 8080 --bind 127.0.0.1 > /tmp/p04-http.log 2>&1 &
+          echo $! > /tmp/p04-http.pid
+          for i in {1..20}; do
+            if curl -fsS http://127.0.0.1:8080/source-p0/p0-outbox-sync-smoke.html >/dev/null; then exit 0; fi
+            sleep 0.25
+          done
+          cat /tmp/p04-http.log
+          exit 1
+
+      - name: Run real IndexedDB outbox transport in Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          from selenium import webdriver
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.support.ui import WebDriverWait
+
+          profile=Path(os.environ['RUNNER_TEMP'])/'p04-sync'
+          shutil.rmtree(profile,ignore_errors=True)
+          options=Options();options.binary_location=os.environ['CHROME']
+          for arg in ['--headless=new','--no-sandbox','--disable-gpu','--disable-dev-shm-usage',f'--user-data-dir={profile}']:
+              options.add_argument(arg)
+          driver=webdriver.Chrome(options=options)
+          try:
+              driver.get('http://127.0.0.1:8080/source-p0/p0-outbox-sync-smoke.html')
+              WebDriverWait(driver,30).until(lambda d:d.title.startswith('PASS') or d.title.startswith('FAIL'))
+              text=driver.find_element(By.ID,'result').text
+              print(driver.title);print(text)
+              if driver.title!='PASS P0.4 OUTBOX':
+                  raise AssertionError(text)
+          finally:
+              driver.quit()
+          PY
+
+      - name: Stop static server
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/p04-http.pid ]; then kill "$(cat /tmp/p04-http.pid)" || true; fi
